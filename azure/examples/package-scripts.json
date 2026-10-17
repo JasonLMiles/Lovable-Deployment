@@ -1,0 +1,8 @@
+{
+  "scripts": {
+    "build": "vite build",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit -p tsconfig.app.json",
+    "test:ci": "vitest run"
+  }
+}

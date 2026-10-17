@@ -1,0 +1,23 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "appName": { "value": "replace-with-globally-unique-name" },
+    "githubRepository": { "value": "YOUR-ORG/YOUR-REPOSITORY" },
+    "authClientId": { "value": "REPLACE-WITH-ENTRA-APP-CLIENT-ID" },
+    "authSecretUri": { "value": "https://YOUR-VAULT.vault.azure.net/secrets/app-login" },
+    "existingVaultName": { "value": "YOUR-VAULT" },
+    "publicConfig": { "value": {
+      "PUBLIC_APP_NAME": "Delivery review",
+      "PUBLIC_ENVIRONMENT": "production",
+      "PUBLIC_API_BASE_URL": "/api",
+      "PUBLIC_SUPABASE_URL": "",
+      "PUBLIC_SUPABASE_PUBLISHABLE_KEY": ""
+    } },
+    "serverSettings": { "value": {
+      "APP_HEALTH_PATH": "/",
+      "SUPABASE_URL": "",
+      "SUPABASE_PUBLISHABLE_KEY": ""
+    } }
+  }
+}

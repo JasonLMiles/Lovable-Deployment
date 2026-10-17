@@ -1,0 +1,67 @@
+name: Azure rollback
+on:
+  workflow_dispatch:
+    inputs:
+      current_revision:
+        description: Full commit SHA currently in production
+        required: true
+      rollback_revision:
+        description: Full commit SHA of the previous release currently in staging
+        required: true
+      data_compatible:
+        description: I confirmed the older application works with the current data schema
+        required: true
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: azure-release
+  cancel-in-progress: false
+jobs:
+  rollback:
+    if: github.ref == 'refs/heads/main' && inputs.data_compatible
+    environment: production
+    runs-on: ${{ vars.AZURE_RUNNER_LABEL || 'ubuntu-latest' }}
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Check the rollback target is still in staging
+        env:
+          STAGING_URL: ${{ vars.AZURE_STAGING_URL }}
+          ROLLBACK_REVISION: ${{ inputs.rollback_revision }}
+        run: node azure/scripts/smoke.mjs "$STAGING_URL" "$ROLLBACK_REVISION"
+      - name: Check current production identity without requiring it to be healthy
+        env:
+          PRODUCTION_URL: ${{ vars.AZURE_PRODUCTION_URL }}
+          CURRENT_REVISION: ${{ inputs.current_revision }}
+        run: |
+          node --input-type=module <<'JS'
+          const response = await fetch(new URL('/healthz', process.env.PRODUCTION_URL), { signal: AbortSignal.timeout(10000) });
+          const data = await response.json();
+          if (!/^[a-f0-9]{40}$/.test(process.env.CURRENT_REVISION) || data.revision !== process.env.CURRENT_REVISION) {
+            throw new Error('Production revision changed or could not be identified; use the documented recovery procedure');
+          }
+          JS
+      - name: Restore the prior release
+        env:
+          RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+          APP_NAME: ${{ vars.AZURE_WEBAPP_NAME }}
+        run: >-
+          az webapp deployment slot swap --resource-group "$RESOURCE_GROUP"
+          --name "$APP_NAME" --slot staging --target-slot production
+      - name: Verify restored production
+        env:
+          PRODUCTION_URL: ${{ vars.AZURE_PRODUCTION_URL }}
+          ROLLBACK_REVISION: ${{ inputs.rollback_revision }}
+        run: node azure/scripts/smoke.mjs "$PRODUCTION_URL" "$ROLLBACK_REVISION"

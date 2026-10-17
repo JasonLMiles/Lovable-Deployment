@@ -1,0 +1,36 @@
+name: Starter validation
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: starter-validation-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Test deployment runtime
+        run: node --test azure/tests/runtime.test.mjs
+      - name: Test release packaging
+        run: python3 -m unittest discover -s azure/tests -p 'test_*.py'
+      - name: Check script syntax
+        run: |
+          bash -n azure/scripts/configure-github.sh
+          node --check azure/runtime/server.mjs
+          node --check azure/scripts/preflight.mjs
+          node --check azure/scripts/smoke.mjs
+      - name: Compile infrastructure without Azure credentials
+        run: az bicep build --file azure/infra/main.bicep --outfile "$RUNNER_TEMP/main.json"

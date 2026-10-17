@@ -1,0 +1,11 @@
+release/
+azure/infra/*.json
+__pycache__/
+*.pyc
+.env
+.env.*
+!.env.example
+node_modules/
+dist/
+.output/
+.DS_Store

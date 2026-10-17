@@ -1,0 +1,32 @@
+name: Azure validation
+on:
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+concurrency:
+  group: validation-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: node azure/scripts/preflight.mjs
+      - run: npm ci
+      - run: npm run lint && npm run typecheck && npm run test:ci
+      - run: npm audit --audit-level=high
+      - run: node --test azure/tests/runtime.test.mjs
+      - run: python3 -m unittest discover -s azure/tests -p 'test_*.py'
+      - run: npm run build
+        env:
+          NITRO_PRESET: node-server
+      - run: python3 azure/scripts/package.py --revision "$REVISION"
+        env:
+          REVISION: ${{ github.event.pull_request.head.sha }}
+      - name: Compile infrastructure without credentials
+        run: az bicep build --file azure/infra/main.bicep --outfile "$RUNNER_TEMP/main.json"

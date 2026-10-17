@@ -1,0 +1,107 @@
+name: Azure release
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+# Keep staging stable while a production approval is pending.
+concurrency:
+  group: azure-release
+  cancel-in-progress: false
+jobs:
+  build:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: node azure/scripts/preflight.mjs
+      - run: npm ci
+      - run: npm run lint && npm run typecheck && npm run test:ci
+      - run: npm audit --audit-level=high
+      - run: node --test azure/tests/runtime.test.mjs
+      - run: python3 -m unittest discover -s azure/tests -p 'test_*.py'
+      - run: npm run build
+        env:
+          NITRO_PRESET: node-server
+      - run: python3 azure/scripts/package.py --revision "$GITHUB_SHA"
+      - name: Compile infrastructure
+        run: az bicep build --file azure/infra/main.bicep --outfile "$RUNNER_TEMP/main.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ github.sha }}
+          path: release/
+          if-no-files-found: error
+          retention-days: 30
+  staging:
+    needs: build
+    environment: staging
+    # Set AZURE_RUNNER_LABEL to a network-connected runner label for private endpoints.
+    runs-on: ${{ vars.AZURE_RUNNER_LABEL || 'ubuntu-latest' }}
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-${{ github.sha }}
+          path: release
+      - run: sha256sum --check app.sha256
+        working-directory: release
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Deploy the compiled package to staging
+        env:
+          RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+          APP_NAME: ${{ vars.AZURE_WEBAPP_NAME }}
+        run: >-
+          az webapp deploy --resource-group "$RESOURCE_GROUP" --name "$APP_NAME"
+          --slot staging --src-path release/app.zip --type zip --restart true
+      - name: Verify release and authentication
+        env:
+          STAGING_URL: ${{ vars.AZURE_STAGING_URL }}
+        run: node azure/scripts/smoke.mjs "$STAGING_URL" "$GITHUB_SHA"
+  production:
+    needs: staging
+    # Configure required reviewers and a main-only branch rule BEFORE enabling releases.
+    environment: production
+    runs-on: ${{ vars.AZURE_RUNNER_LABEL || 'ubuntu-latest' }}
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Recheck the exact staging release after approval
+        env:
+          STAGING_URL: ${{ vars.AZURE_STAGING_URL }}
+        run: node azure/scripts/smoke.mjs "$STAGING_URL" "$GITHUB_SHA"
+      - name: Promote the tested release
+        env:
+          RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+          APP_NAME: ${{ vars.AZURE_WEBAPP_NAME }}
+        run: >-
+          az webapp deployment slot swap --resource-group "$RESOURCE_GROUP"
+          --name "$APP_NAME" --slot staging --target-slot production
+      - name: Verify production
+        env:
+          PRODUCTION_URL: ${{ vars.AZURE_PRODUCTION_URL }}
+        run: node azure/scripts/smoke.mjs "$PRODUCTION_URL" "$GITHUB_SHA"
